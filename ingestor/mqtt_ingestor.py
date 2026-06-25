@@ -5,7 +5,7 @@ import time
 
 DB_CONFIG = {
     "host":     "localhost",
-    "port":     5432,
+    "port":     5433,
     "dbname":   "telemetry",
     "user":     "telemetry",
     "password": "telemetry",
@@ -23,6 +23,7 @@ def get_db():
     return psycopg2.connect(**DB_CONFIG)
 
 def write_row(cur, data):
+    print(f"  Writing row for session {data.get('session_id')}, ts={data.get('ts')}")
     cur.execute("""
         INSERT INTO telemetry (
             time, session_id,
@@ -83,6 +84,7 @@ def try_merge_and_write(session_id, db):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
+        # print(f"Received: {msg.topic}")
         session_id = payload.get("session_id", "unknown")
         topic = msg.topic
 
@@ -91,7 +93,10 @@ def on_message(client, userdata, msg):
         elif topic == "telemetry/vehicle/imu":
             imu_buffer[session_id] = payload
 
+        # print(f"  obd_buffer: {list(obd_buffer.keys())}, imu_buffer: {list(imu_buffer.keys())}")
         try_merge_and_write(session_id, userdata["db"])
+        # print(f"  after merge — obd_buffer: {list(obd_buffer.keys())}, imu_buffer: {list(imu_buffer.keys())}")
+
 
     except Exception as e:
         print(f"Error: {e}")
