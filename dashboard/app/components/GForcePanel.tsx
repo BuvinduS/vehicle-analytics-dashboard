@@ -27,6 +27,8 @@ export default function GForcePanel({ accelX, accelY, size = 180 }: GForcePanelP
   const gMag = Math.sqrt(gX * gX + gY * gY);
   const dotColor = gMag > 1.2 ? "var(--accent-red)" : gMag > 0.6 ? "var(--accent-amber)" : "var(--accent-cyan)";
 
+  if (accelX == null || accelY == null) return null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>

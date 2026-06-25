@@ -1,18 +1,6 @@
 services:
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: telemetry_broker
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
-    restart: unless-stopped
-
   timescaledb:
     image: timescale/timescaledb:latest-pg16
-    container_name: telemetry_db
     environment:
       POSTGRES_USER: telemetry
       POSTGRES_PASSWORD: telemetry
@@ -25,6 +13,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mosquitto_data:
-  mosquitto_log:
   timescaledb_data:
