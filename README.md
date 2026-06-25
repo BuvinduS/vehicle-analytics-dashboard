@@ -1,6 +1,6 @@
 # Vehicle Analytics Dashboard
 
-A motorsport telemetry and driver performance platform built as a semester embedded systems project. An ESP32 reads IMU data via MPU6050 and a Raspberry Pi 5 reads OBD-II data via a Bluetooth ELM327 adapter — both publish over MQTT to a local pipeline that ingests into TimescaleDB and streams live to a custom dashboard.
+A vehicle analytics embedded platform. An ESP32 reads IMU data via MPU6050 and a Raspberry Pi 5 reads OBD-II data via a Bluetooth ELM327 adapter — both publish over MQTT to a local pipeline that ingests into TimescaleDB and streams live to a custom dashboard.
 
 ---
 
