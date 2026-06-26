@@ -50,5 +50,5 @@ WITH NO DATA;
 INSERT INTO drivers (id, name) VALUES ('driver_a', 'Test Driver')
     ON CONFLICT DO NOTHING;
 
-INSERT INTO sessions (id, driver_id, notes) VALUES ('mock_001', 'driver_a', 'Mock data session')
+INSERT INTO sessions (id, driver_id, notes) VALUES ('live_001', 'driver_a', 'Live OBD session')
     ON CONFLICT DO NOTHING;
