@@ -158,6 +158,20 @@ def build_payload(core_data, all_pids=None):
     return payload
 
 
+def connect_obd() -> obd.OBD | None:
+    """Attempt to connect to OBD, return None on failure."""
+    try:
+        conn = obd.OBD(SERIAL_PORT)
+        if conn.is_connected():
+            log.info("OBD connected — status: %s", conn.status())
+            log.info("Supported commands: %d", len(conn.supported_commands))
+            return conn
+        return None
+    except Exception as e:
+        log.error("OBD connection error: %s", e)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -171,41 +185,48 @@ def main():
     mqtt_client.loop_start()
     log.info("MQTT connected to %s:%d", BROKER_HOST, BROKER_PORT)
 
-    # Connect to OBD
-    log.info("Connecting to OBD on %s...", SERIAL_PORT)
-    conn = obd.OBD(SERIAL_PORT)
-
-    if not conn.is_connected():
-        log.error("Failed to connect to OBD. Is rfcomm0 up and engine running?")
-        mqtt_client.loop_stop()
-        return
-
-    log.info("OBD connected — status: %s", conn.status())
-    log.info("Supported commands: %d", len(conn.supported_commands))
+    conn = None
 
     try:
         while True:
-            mode = current_mode  # snapshot to avoid mid-loop race
+            # Reconnect if needed
+            if conn is None or not conn.is_connected():
+                log.info("Connecting to OBD on %s...", SERIAL_PORT)
+                conn = connect_obd()
+                if conn is None:
+                    log.warning("OBD not available, retrying in 5s...")
+                    time.sleep(5)
+                    continue
 
-            core_data = query_core(conn)
+            try:
+                mode = current_mode
+                core_data = query_core(conn)
 
-            if mode == "advanced":
-                all_pids = query_all(conn)
-                payload  = build_payload(core_data, all_pids)
-            else:
-                payload = build_payload(core_data)
+                if mode == "advanced":
+                    all_pids = query_all(conn)
+                    payload = build_payload(core_data, all_pids)
+                else:
+                    payload = build_payload(core_data)
 
-            mqtt_client.publish(TOPIC_OBD, json.dumps(payload))
-            log.debug("Published: speed=%(speed_kmh)s rpm=%(rpm)s", payload)
+                mqtt_client.publish(TOPIC_OBD, json.dumps(payload))
+                log.debug("Published: speed=%(speed_kmh)s rpm=%(rpm)s", payload)
 
-            # Normal: ~5Hz (limited by OBD query time anyway)
-            # Advanced: ~1Hz (many queries, naturally slower)
-            time.sleep(0.0 if mode == "advanced" else 0.1)
+                time.sleep(0.0 if mode == "advanced" else 0.1)
+
+            except Exception as e:
+                log.warning("Query error, reconnecting: %s", e)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
+                time.sleep(2)
 
     except KeyboardInterrupt:
         log.info("Stopping OBD publisher...")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
 
