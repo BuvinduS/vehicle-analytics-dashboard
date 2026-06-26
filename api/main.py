@@ -1,7 +1,10 @@
 """
 FastAPI WebSocket bridge: MQTT → WebSocket fan-out (bidirectional)
+Handles two message types:
+  - telemetry frames (from telemetry/vehicle/obd + telemetry/vehicle/imu)
+  - vehicle info (from telemetry/vehicle/info) — sent once at connection
+
 Browser can send {"mode": "normal"} or {"mode": "advanced"} to switch OBD mode.
-Run with:  uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import json
@@ -17,18 +20,19 @@ from fastapi.middleware.cors import CORSMiddleware
 # Config
 # ---------------------------------------------------------------------------
 
-BROKER_HOST   = "localhost"
-BROKER_PORT   = 1883
-TOPIC_OBD     = "telemetry/vehicle/obd"
-TOPIC_IMU     = "telemetry/vehicle/imu"
-TOPIC_CONTROL = "telemetry/control"
+BROKER_HOST        = "localhost"
+BROKER_PORT        = 1883
+TOPIC_OBD          = "telemetry/vehicle/obd"
+TOPIC_IMU          = "telemetry/vehicle/imu"
+TOPIC_CONTROL      = "telemetry/control"
+TOPIC_VEHICLE_INFO = "telemetry/vehicle/info"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# In-memory merged telemetry state
+# In-memory state
 # ---------------------------------------------------------------------------
 
 class TelemetryState:
@@ -52,6 +56,9 @@ class TelemetryState:
 
 state = TelemetryState()
 
+# Last known vehicle info — sent to new clients on connect
+last_vehicle_info: dict | None = None
+
 
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
@@ -64,7 +71,17 @@ class ConnectionManager:
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self._clients.append(ws)
-        log.info("Dashboard client connected  (total: %d)", len(self._clients))
+        log.info("Dashboard client connected (total: %d)", len(self._clients))
+
+        # Send last known vehicle info immediately on connect
+        if last_vehicle_info:
+            try:
+                await ws.send_text(json.dumps({
+                    "type": "vehicle_info",
+                    **last_vehicle_info
+                }))
+            except Exception:
+                pass
 
     def disconnect(self, ws: WebSocket):
         if ws in self._clients:
@@ -87,13 +104,12 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-# ---------------------------------------------------------------------------
-# MQTT client (module-level so the WS endpoint can publish control messages)
-# ---------------------------------------------------------------------------
-
 mqtt_client: mqtt.Client | None = None
 
+
+# ---------------------------------------------------------------------------
+# MQTT
+# ---------------------------------------------------------------------------
 
 def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -103,11 +119,13 @@ def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
             log.info("MQTT connected to %s:%d", BROKER_HOST, BROKER_PORT)
             client.subscribe(TOPIC_OBD)
             client.subscribe(TOPIC_IMU)
-            log.info("Subscribed to %s and %s", TOPIC_OBD, TOPIC_IMU)
+            client.subscribe(TOPIC_VEHICLE_INFO)
+            log.info("Subscribed to OBD, IMU, and vehicle info topics")
         else:
             log.error("MQTT connection failed: reason_code=%s", reason_code)
 
     def on_message(client, userdata, msg):
+        global last_vehicle_info
         try:
             payload = json.loads(msg.payload.decode())
         except json.JSONDecodeError:
@@ -121,6 +139,15 @@ def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
 
         elif msg.topic == TOPIC_IMU:
             state.update_imu(payload)
+
+        elif msg.topic == TOPIC_VEHICLE_INFO:
+            last_vehicle_info = payload
+            log.info("Vehicle info received: %s %s %s",
+                     payload.get("year"), payload.get("make"), payload.get("model"))
+            # Broadcast to all connected dashboard clients
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "vehicle_info", **payload}), loop
+            )
 
     def on_disconnect(client, userdata, flags, reason_code, properties):
         log.warning("MQTT disconnected (reason_code=%s)", reason_code)
@@ -165,7 +192,7 @@ app = FastAPI(title="Telemetry WS Bridge", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],  # open for LAN access from any device
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -174,7 +201,11 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "broker": f"{BROKER_HOST}:{BROKER_PORT}"}
+    return {
+        "status": "ok",
+        "broker": f"{BROKER_HOST}:{BROKER_PORT}",
+        "vehicle": last_vehicle_info,
+    }
 
 
 @app.websocket("/ws")
@@ -182,14 +213,12 @@ async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         while True:
-            # Receive messages from the browser (mode switch etc.)
             text = await ws.receive_text()
             try:
                 msg = json.loads(text)
-                # Forward control messages to MQTT so the OBD publisher picks them up
                 if "mode" in msg and mqtt_client:
                     mqtt_client.publish(TOPIC_CONTROL, json.dumps({"mode": msg["mode"]}))
-                    log.info("Mode switch forwarded to MQTT: %s", msg["mode"])
+                    log.info("Mode switch forwarded: %s", msg["mode"])
             except json.JSONDecodeError:
                 log.warning("Bad JSON from browser: %s", text)
     except WebSocketDisconnect:

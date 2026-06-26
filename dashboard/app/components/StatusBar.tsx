@@ -1,6 +1,6 @@
 "use client";
 
-import { ConnectionStatus } from "../hooks/useTelemetry";
+import { ConnectionStatus, VehicleInfo } from "../hooks/useTelemetry";
 
 interface StatusBarProps {
   status: ConnectionStatus;
@@ -8,6 +8,8 @@ interface StatusBarProps {
   lastTs: number | null;
   mode: "normal" | "advanced";
   onModeToggle: () => void;
+  vehicleInfo: VehicleInfo | null;
+  onVehicleInfoOpen: () => void;
 }
 
 export default function StatusBar({
@@ -16,6 +18,8 @@ export default function StatusBar({
   lastTs,
   mode,
   onModeToggle,
+  vehicleInfo,
+  onVehicleInfoOpen,
 }: StatusBarProps) {
   const statusConfig = {
     connected:    { color: "var(--accent-cyan)", label: "LIVE" },
@@ -27,6 +31,10 @@ export default function StatusBar({
     ? `${Math.round(Date.now() / 1000 - lastTs)} s ago`
     : "—";
 
+  const vehicleSummary = vehicleInfo?.make
+    ? `${vehicleInfo.year ?? ""} ${vehicleInfo.make} ${vehicleInfo.model ?? ""}`.trim()
+    : null;
+
   return (
     <header style={{
       display: "flex",
@@ -35,9 +43,11 @@ export default function StatusBar({
       padding: "10px 24px",
       borderBottom: "1px solid var(--border)",
       background: "var(--bg-card)",
+      flexWrap: "wrap",
+      gap: "8px",
     }}>
-      {/* Left: branding */}
-      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+      {/* Left: branding + vehicle summary */}
+      <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
         <span style={{
           fontFamily: "'Rajdhani', sans-serif",
           fontWeight: 700,
@@ -47,25 +57,45 @@ export default function StatusBar({
         }}>
           TELEMETRY
         </span>
-        <span style={{
-          fontFamily: "'Rajdhani', sans-serif",
-          fontWeight: 500,
-          fontSize: "0.75rem",
-          letterSpacing: "0.15em",
-          color: "var(--text-muted)",
-        }}>
-          DRIVER PERFORMANCE PLATFORM
-        </span>
+
+        {vehicleSummary ? (
+          <button
+            onClick={onVehicleInfoOpen}
+            style={{
+              fontFamily: "'Rajdhani', sans-serif",
+              fontWeight: 600,
+              fontSize: "0.82rem",
+              letterSpacing: "0.1em",
+              color: "var(--accent-cyan)",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              textDecoration: "none",
+            }}
+          >
+            {vehicleSummary} ›
+          </button>
+        ) : (
+          <span style={{
+            fontFamily: "'Rajdhani', sans-serif",
+            fontWeight: 500,
+            fontSize: "0.75rem",
+            letterSpacing: "0.15em",
+            color: "var(--text-muted)",
+          }}>
+            DRIVER PERFORMANCE PLATFORM
+          </span>
+        )}
       </div>
 
-      {/* Right: mode toggle + status */}
-      <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
+      {/* Right: controls + status */}
+      <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
         {sessionId && (
           <span style={{
             fontFamily: "'JetBrains Mono', monospace",
             fontSize: "0.72rem",
             color: "var(--text-muted)",
-            letterSpacing: "0.05em",
           }}>
             SESSION: <span style={{ color: "var(--text-primary)" }}>{sessionId}</span>
           </span>
@@ -79,7 +109,7 @@ export default function StatusBar({
           {latency}
         </span>
 
-        {/* Mode toggle button */}
+        {/* Mode toggle */}
         <button
           onClick={onModeToggle}
           style={{
@@ -96,7 +126,7 @@ export default function StatusBar({
             transition: "all 200ms ease",
           }}
         >
-          {mode === "advanced" ? "NORMAL VIEW" : "ADVANCED"}
+          {mode === "advanced" ? "NORMAL" : "ADVANCED"}
         </button>
 
         {/* Connection status */}

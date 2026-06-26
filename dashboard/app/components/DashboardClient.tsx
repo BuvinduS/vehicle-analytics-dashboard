@@ -6,6 +6,7 @@ import GForcePanel from "./GForcePanel";
 import LinearBar from "./LinearBar";
 import StatusBar from "./StatusBar";
 import AdvancedTable from "./AdvancedTable";
+import VehicleInfoPanel from "./VehicleInfoPanel";
 import { useTelemetry } from "../hooks/useTelemetry";
 
 const DEFAULTS = {
@@ -20,10 +21,11 @@ const DEFAULTS = {
 };
 
 export default function DashboardClient() {
-  const { frame, status, sendMessage } = useTelemetry();
+  const { frame, vehicleInfo, status, sendMessage } = useTelemetry();
   const d = frame ?? DEFAULTS;
 
   const [uiMode, setUiMode] = useState<"normal" | "advanced">("normal");
+  const [showVehicleInfo, setShowVehicleInfo] = useState(false);
 
   const handleModeToggle = useCallback(() => {
     const next = uiMode === "normal" ? "advanced" : "normal";
@@ -31,7 +33,6 @@ export default function DashboardClient() {
     sendMessage({ mode: next });
   }, [uiMode, sendMessage]);
 
-  // Gauge sizes: normal view = full size, advanced view = compact row
   const isAdvanced = uiMode === "advanced";
   const heroSize  = isAdvanced ? 130 : 260;
   const mainSize  = isAdvanced ? 120 : 220;
@@ -51,9 +52,11 @@ export default function DashboardClient() {
         lastTs={frame?.ts ?? null}
         mode={uiMode}
         onModeToggle={handleModeToggle}
+        vehicleInfo={vehicleInfo}
+        onVehicleInfoOpen={() => setShowVehicleInfo(true)}
       />
 
-      {/* Gauge strip — always visible, shrinks in advanced mode */}
+      {/* Gauge strip */}
       <div style={{
         display: "flex",
         alignItems: "center",
@@ -65,14 +68,12 @@ export default function DashboardClient() {
         borderBottom: isAdvanced ? "1px solid var(--border)" : "none",
         transition: "padding 300ms ease, gap 300ms ease",
       }}>
-        {/* Speed */}
         <div style={{
           background: "var(--bg-card)",
           borderRadius: "50%",
           padding: isAdvanced ? "12px" : "24px",
           border: "1px solid var(--border)",
           boxShadow: "0 0 40px rgba(0,229,255,0.04)",
-          transition: "padding 300ms ease",
         }}>
           <ArcGauge
             value={d.speed_kmh ?? 0}
@@ -84,7 +85,6 @@ export default function DashboardClient() {
           />
         </div>
 
-        {/* RPM */}
         <div style={{
           background: "var(--bg-card)",
           borderRadius: "50%",
@@ -102,7 +102,6 @@ export default function DashboardClient() {
           />
         </div>
 
-        {/* Throttle */}
         <div style={{
           background: "var(--bg-card)",
           borderRadius: "50%",
@@ -120,7 +119,6 @@ export default function DashboardClient() {
           />
         </div>
 
-        {/* Coolant */}
         <div style={{
           background: "var(--bg-card)",
           borderRadius: "50%",
@@ -138,7 +136,6 @@ export default function DashboardClient() {
           />
         </div>
 
-        {/* G-force */}
         <div style={{
           background: "var(--bg-card)",
           borderRadius: isAdvanced ? "12px" : "16px",
@@ -155,7 +152,6 @@ export default function DashboardClient() {
           />
         </div>
 
-        {/* Engine load bar — only in normal mode */}
         {!isAdvanced && (
           <div style={{
             background: "var(--bg-card)",
@@ -176,7 +172,7 @@ export default function DashboardClient() {
         )}
       </div>
 
-      {/* Advanced table — only in advanced mode, takes remaining space */}
+      {/* Advanced table */}
       {isAdvanced && (
         <AdvancedTable
           allPids={frame?.all_pids ?? {}}
@@ -187,6 +183,14 @@ export default function DashboardClient() {
             coolant_temp_c:  d.coolant_temp_c,
             engine_load_pct: d.engine_load_pct,
           }}
+        />
+      )}
+
+      {/* Vehicle info modal */}
+      {showVehicleInfo && vehicleInfo && (
+        <VehicleInfoPanel
+          info={vehicleInfo}
+          onClose={() => setShowVehicleInfo(false)}
         />
       )}
 

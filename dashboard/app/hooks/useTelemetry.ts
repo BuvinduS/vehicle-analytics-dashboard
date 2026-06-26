@@ -23,6 +23,24 @@ export interface TelemetryFrame {
   all_pids?: Record<string, PidEntry>;
 }
 
+export interface VehicleInfo {
+  vin: string | null;
+  make: string | null;
+  model: string | null;
+  year: string | null;
+  trim: string | null;
+  body_class: string | null;
+  drive_type: string | null;
+  fuel_type: string | null;
+  fuel_type_secondary: string | null;
+  engine_l: string | null;
+  engine_cyl: string | null;
+  transmission: string | null;
+  plant_country: string | null;
+  vehicle_type: string | null;
+  electrification_level: string | null;
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
@@ -30,6 +48,7 @@ const RECONNECT_DELAY_MS = 2000;
 
 export function useTelemetry() {
   const [frame, setFrame] = useState<TelemetryFrame | null>(null);
+  const [vehicleInfo, setVehicleInfo] = useState<VehicleInfo | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,10 +68,17 @@ export function useTelemetry() {
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
       try {
-        const data: TelemetryFrame = JSON.parse(event.data);
-        setFrame(data);
+        const data = JSON.parse(event.data);
+
+        // Route by message type
+        if (data.type === "vehicle_info") {
+          const { type, ...info } = data;
+          setVehicleInfo(info as VehicleInfo);
+        } else {
+          setFrame(data as TelemetryFrame);
+        }
       } catch {
-        console.warn("Failed to parse telemetry frame", event.data);
+        console.warn("Failed to parse message", event.data);
       }
     };
 
@@ -65,7 +91,6 @@ export function useTelemetry() {
     ws.onerror = () => ws.close();
   }, []);
 
-  // Send a message to the server (e.g. mode switch)
   const sendMessage = useCallback((data: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
@@ -82,5 +107,5 @@ export function useTelemetry() {
     };
   }, [connect]);
 
-  return { frame, status, sendMessage };
+  return { frame, vehicleInfo, status, sendMessage };
 }

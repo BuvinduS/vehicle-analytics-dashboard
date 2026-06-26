@@ -6,6 +6,9 @@ Two modes:
   normal   — queries 5 core PIDs at ~5Hz
   advanced — queries all supported PIDs at ~1Hz
 
+At startup, queries VIN and decodes vehicle info via NHTSA API,
+publishing once to telemetry/vehicle/info.
+
 Mode is switched by publishing to telemetry/control:
   {"mode": "advanced"} or {"mode": "normal"}
 
@@ -17,6 +20,7 @@ import paho.mqtt.client as mqtt
 import json
 import time
 import logging
+import requests
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -25,13 +29,17 @@ log = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-SERIAL_PORT   = "/dev/rfcomm0"
-BROKER_HOST   = "localhost"
-BROKER_PORT   = 1883
-TOPIC_OBD     = "telemetry/vehicle/obd"
-TOPIC_CONTROL = "telemetry/control"
-SESSION_ID    = "live_001"
-DRIVER_ID     = "driver_a"
+SERIAL_PORT        = "/dev/rfcomm0"
+BROKER_HOST        = "localhost"
+BROKER_PORT        = 1883
+TOPIC_OBD          = "telemetry/vehicle/obd"
+TOPIC_CONTROL      = "telemetry/control"
+TOPIC_VEHICLE_INFO = "telemetry/vehicle/info"
+SESSION_ID         = "mock_001"
+DRIVER_ID          = "driver_a"
+MAX_RETRIES = 5 
+
+NHTSA_URL = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/{}?format=json"
 
 CORE_COMMANDS = [
     obd.commands.SPEED,
@@ -41,16 +49,23 @@ CORE_COMMANDS = [
     obd.commands.ENGINE_LOAD,
 ]
 
-# PIDs to skip in advanced mode — these are meta/admin commands not useful for display
 SKIP_COMMANDS = {
-    "PIDS_A", "PIDS_B", "PIDS_C",          # supported PID bitmasks
-    "MIDS_A", "MIDS_B", "MIDS_C", "MIDS_D", # monitor ID bitmasks
+    "PIDS_A", "PIDS_B", "PIDS_C",
+    "MIDS_A", "MIDS_B", "MIDS_C", "MIDS_D",
     "GET_DTC", "CLEAR_DTC", "GET_CURRENT_DTC",
     "ELM_VERSION", "ELM_VOLTAGE",
 }
 
+CORE_FIELD_MAP = {
+    "SPEED":        "speed_kmh",
+    "RPM":          "rpm",
+    "THROTTLE_POS": "throttle_pct",
+    "COOLANT_TEMP": "coolant_temp_c",
+    "ENGINE_LOAD":  "engine_load_pct",
+}
+
 # ---------------------------------------------------------------------------
-# Mode state (mutated by MQTT control messages)
+# Mode state
 # ---------------------------------------------------------------------------
 
 current_mode = "normal"
@@ -69,11 +84,73 @@ def on_control_message(client, userdata, msg):
 
 
 # ---------------------------------------------------------------------------
+# Vehicle info
+# ---------------------------------------------------------------------------
+
+def get_vehicle_info(conn, mqtt_client):
+    """Query VIN, decode via NHTSA, publish to telemetry/vehicle/info."""
+    log.info("Querying VIN...")
+
+    try:
+        vin_response = conn.query(obd.commands.VIN)
+    except Exception as e:
+        log.warning("VIN query failed: %s", e)
+        return
+
+    if vin_response.is_null():
+        log.warning("VIN not available from this vehicle")
+        mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps({"vin": None}))
+        return
+
+    vin = str(vin_response.value).strip()
+    log.info("VIN: %s", vin)
+
+    info = {"vin": vin}
+
+    try:
+        r = requests.get(NHTSA_URL.format(vin), timeout=10)
+        r.raise_for_status()
+        results = r.json().get("Results", [])
+        fields = {item["Variable"]: item["Value"] for item in results}
+
+        # Extract useful fields, skip None/"Not Applicable" values
+        def get(key):
+            v = fields.get(key)
+            return v if v and v not in ("Not Applicable", "null", "") else None
+
+        info.update({
+            "make":          get("Make"),
+            "model":         get("Model"),
+            "year":          get("Model Year"),
+            "trim":          get("Trim"),
+            "body_class":    get("Body Class"),
+            "drive_type":    get("Drive Type"),
+            "fuel_type":     get("Fuel Type - Primary"),
+            "fuel_type_secondary": get("Fuel Type - Secondary"),
+            "engine_l":      get("Displacement (L)"),
+            "engine_cyl":    get("Engine Number of Cylinders"),
+            "transmission":  get("Transmission Style"),
+            "plant_country": get("Plant Country"),
+            "vehicle_type":  get("Vehicle Type"),
+            "electrification_level": get("Electrification Level"),
+        })
+
+        log.info("Vehicle: %s %s %s", info.get("year"), info.get("make"), info.get("model"))
+
+    except requests.RequestException as e:
+        log.warning("NHTSA lookup failed (no internet?): %s", e)
+    except Exception as e:
+        log.warning("NHTSA parse error: %s", e)
+
+    mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps(info))
+    log.info("Vehicle info published")
+
+
+# ---------------------------------------------------------------------------
 # Value extraction
 # ---------------------------------------------------------------------------
 
 def extract_value(response):
-    """Extract a JSON-serialisable value from a python-obd response."""
     if response.is_null():
         return None
     val = response.value
@@ -85,7 +162,6 @@ def extract_value(response):
 
 
 def extract_unit(response):
-    """Extract unit string from a python-obd response."""
     if response.is_null():
         return None
     val = response.value
@@ -99,7 +175,6 @@ def extract_unit(response):
 # ---------------------------------------------------------------------------
 
 def query_core(conn):
-    """Query the 5 core PIDs. Returns partial payload dict."""
     data = {}
     for cmd in CORE_COMMANDS:
         if cmd in conn.supported_commands:
@@ -109,7 +184,6 @@ def query_core(conn):
 
 
 def query_all(conn):
-    """Query all supported PIDs. Returns all_pids dict."""
     all_pids = {}
     for cmd in conn.supported_commands:
         if cmd.name in SKIP_COMMANDS:
@@ -127,20 +201,6 @@ def query_all(conn):
     return all_pids
 
 
-# ---------------------------------------------------------------------------
-# Core PID → payload field name mapping
-# Keeps payload shape identical to mock/obd_publisher.py
-# ---------------------------------------------------------------------------
-
-CORE_FIELD_MAP = {
-    "SPEED":        "speed_kmh",
-    "RPM":          "rpm",
-    "THROTTLE_POS": "throttle_pct",
-    "COOLANT_TEMP": "coolant_temp_c",
-    "ENGINE_LOAD":  "engine_load_pct",
-}
-
-
 def build_payload(core_data, all_pids=None):
     payload = {
         "ts":         time.time(),
@@ -148,20 +208,20 @@ def build_payload(core_data, all_pids=None):
         "driver_id":  DRIVER_ID,
         "mode":       current_mode,
     }
-    # Map core fields to schema-compatible names
     for cmd_name, field_name in CORE_FIELD_MAP.items():
         payload[field_name] = core_data.get(cmd_name)
-
     if all_pids is not None:
         payload["all_pids"] = all_pids
-
     return payload
 
 
-def connect_obd() -> obd.OBD | None:
-    """Attempt to connect to OBD, return None on failure."""
+# ---------------------------------------------------------------------------
+# OBD connection
+# ---------------------------------------------------------------------------
+
+def connect_obd():
     try:
-        conn = obd.OBD(SERIAL_PORT)
+        conn = obd.OBD(SERIAL_PORT, timeout=3)
         if conn.is_connected():
             log.info("OBD connected — status: %s", conn.status())
             log.info("Supported commands: %d", len(conn.supported_commands))
@@ -177,7 +237,6 @@ def connect_obd() -> obd.OBD | None:
 # ---------------------------------------------------------------------------
 
 def main():
-    # Connect to MQTT
     mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     mqtt_client.on_message = on_control_message
     mqtt_client.connect(BROKER_HOST, BROKER_PORT)
@@ -186,17 +245,21 @@ def main():
     log.info("MQTT connected to %s:%d", BROKER_HOST, BROKER_PORT)
 
     conn = None
+    vehicle_info_published = False
 
     try:
+        retry_count = 0
+
         while True:
-            # Reconnect if needed
             if conn is None or not conn.is_connected():
                 log.info("Connecting to OBD on %s...", SERIAL_PORT)
                 conn = connect_obd()
                 if conn is None:
-                    log.warning("OBD not available, retrying in 5s...")
-                    time.sleep(5)
-                    continue
+                    log.error("OBD connection failed, exiting for connect.sh to reconnect")
+                    break  # exit immediately, connect.sh loops
+                if not vehicle_info_published:
+                    get_vehicle_info(conn, mqtt_client)
+                    vehicle_info_published = True
 
             try:
                 mode = current_mode
@@ -204,23 +267,20 @@ def main():
 
                 if mode == "advanced":
                     all_pids = query_all(conn)
-                    payload = build_payload(core_data, all_pids)
+                    payload  = build_payload(core_data, all_pids)
                 else:
                     payload = build_payload(core_data)
 
                 mqtt_client.publish(TOPIC_OBD, json.dumps(payload))
-                log.debug("Published: speed=%(speed_kmh)s rpm=%(rpm)s", payload)
-
                 time.sleep(0.0 if mode == "advanced" else 0.1)
 
             except Exception as e:
-                log.warning("Query error, reconnecting: %s", e)
+                log.warning("Query error: %s — exiting for connect.sh to reconnect", e)
                 try:
                     conn.close()
                 except Exception:
                     pass
-                conn = None
-                time.sleep(2)
+                break  # exit immediately
 
     except KeyboardInterrupt:
         log.info("Stopping OBD publisher...")
