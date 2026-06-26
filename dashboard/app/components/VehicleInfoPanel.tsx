@@ -9,31 +9,6 @@ interface VehicleInfoPanelProps {
   onVehicleInfoDecoded: (info: VehicleInfo) => void;
 }
 
-interface InfoRow {
-  label: string;
-  value: string | null | undefined;
-}
-
-function buildRows(info: VehicleInfo): InfoRow[] {
-  return [
-    { label: "VIN",              value: info.vin },
-    { label: "Make",             value: info.make },
-    { label: "Model",            value: info.model },
-    { label: "Year",             value: info.year },
-    { label: "Trim",             value: info.trim },
-    { label: "Body Class",       value: info.body_class },
-    { label: "Vehicle Type",     value: info.vehicle_type },
-    { label: "Drive Type",       value: info.drive_type },
-    { label: "Fuel Type",        value: info.fuel_type },
-    { label: "Fuel (Secondary)", value: info.fuel_type_secondary },
-    { label: "Electrification",  value: info.electrification_level },
-    { label: "Engine",           value: info.engine_l ? `${info.engine_l}L` : null },
-    { label: "Cylinders",        value: info.engine_cyl },
-    { label: "Transmission",     value: info.transmission },
-    { label: "Plant Country",    value: info.plant_country },
-  ];
-}
-
 export default function VehicleInfoPanel({
   info,
   onClose,
@@ -44,6 +19,7 @@ export default function VehicleInfoPanel({
   const [error, setError] = useState<string | null>(null);
 
   const vinMissing = !info?.vin;
+  const hasData = info && Object.keys(info.extra_fields ?? {}).length > 0;
 
   async function handleVinSubmit() {
     const vin = vinInput.trim().toUpperCase();
@@ -59,13 +35,27 @@ export default function VehicleInfoPanel({
         setError("Could not decode this VIN. Please check and try again.");
         return;
       }
-      onVehicleInfoDecoded(decoded as VehicleInfo);
-    } catch (e) {
+      onVehicleInfoDecoded(decoded);
+    } catch {
       setError("Lookup failed. Check your internet connection.");
     } finally {
       setLoading(false);
     }
   }
+
+  // Sort fields alphabetically, pin Make/Model/Year/VIN to top
+  const PIN_ORDER = ["Make", "Model", "Model Year", "Vehicle Type", "Body Class"];
+  const rows = hasData
+    ? [
+        ...PIN_ORDER
+          .filter(k => info!.extra_fields[k])
+          .map(k => ({ label: k, value: info!.extra_fields[k] })),
+        ...Object.entries(info!.extra_fields)
+          .filter(([k]) => !PIN_ORDER.includes(k))
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([label, value]) => ({ label, value })),
+      ]
+    : [];
 
   return (
     <>
@@ -87,7 +77,7 @@ export default function VehicleInfoPanel({
         top: "50%",
         left: "50%",
         transform: "translate(-50%, -50%)",
-        width: "min(480px, 90vw)",
+        width: "min(520px, 90vw)",
         maxHeight: "80vh",
         background: "var(--bg-card)",
         border: "1px solid var(--border)",
@@ -105,16 +95,30 @@ export default function VehicleInfoPanel({
           padding: "16px 20px",
           borderBottom: "1px solid var(--border)",
           background: "var(--bg-panel)",
+          flexShrink: 0,
         }}>
-          <span style={{
-            fontFamily: "'Rajdhani', sans-serif",
-            fontWeight: 700,
-            fontSize: "0.9rem",
-            letterSpacing: "0.2em",
-            color: "var(--text-primary)",
-          }}>
-            VEHICLE INFORMATION
-          </span>
+          <div>
+            <span style={{
+              fontFamily: "'Rajdhani', sans-serif",
+              fontWeight: 700,
+              fontSize: "0.9rem",
+              letterSpacing: "0.2em",
+              color: "var(--text-primary)",
+            }}>
+              VEHICLE INFORMATION
+            </span>
+            {info?.vin && (
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "0.7rem",
+                color: "var(--text-muted)",
+                marginLeft: "12px",
+                letterSpacing: "0.05em",
+              }}>
+                {info.vin}
+              </span>
+            )}
+          </div>
           <button
             onClick={onClose}
             style={{
@@ -137,22 +141,21 @@ export default function VehicleInfoPanel({
         {/* Manual VIN entry — shown when VIN not available from ECU */}
         {vinMissing && (
           <div style={{
-            padding: "20px",
+            padding: "16px 20px",
             borderBottom: "1px solid var(--border)",
             background: "rgba(255,179,0,0.04)",
+            flexShrink: 0,
           }}>
             <p style={{
               fontFamily: "'Rajdhani', sans-serif",
               fontSize: "0.82rem",
               color: "var(--text-muted)",
-              marginBottom: "12px",
+              marginBottom: "10px",
               lineHeight: 1.5,
             }}>
-              VIN not available from this vehicle's ECU. Enter it manually to
-              identify the vehicle — find it on the windshield (driver's side,
-              bottom corner) or the driver's door jamb.
+              VIN not available from this vehicle's ECU. Enter it manually —
+              find it on the windshield (driver's side, bottom corner) or door jamb.
             </p>
-
             <div style={{ display: "flex", gap: "8px" }}>
               <input
                 value={vinInput}
@@ -198,14 +201,12 @@ export default function VehicleInfoPanel({
                 {loading ? "..." : "GO"}
               </button>
             </div>
-
             {error && (
               <p style={{
                 fontFamily: "'Rajdhani', sans-serif",
                 fontSize: "0.75rem",
                 color: "var(--accent-red)",
                 marginTop: "6px",
-                letterSpacing: "0.05em",
               }}>
                 {error}
               </p>
@@ -213,95 +214,89 @@ export default function VehicleInfoPanel({
           </div>
         )}
 
-        {/* Info rows — shown when VIN is available (auto or manual) */}
-        {info && !vinMissing && (
+        {/* Dynamic fields table */}
+        {hasData ? (
           <div style={{ overflowY: "auto", flex: 1 }}>
-            {buildRows(info).map((row, i) => {
-              const isNull = !row.value;
-              return (
-                <div key={row.label} style={{
-                  display: "grid",
-                  gridTemplateColumns: "160px 1fr",
-                  padding: "10px 20px",
-                  borderBottom: "1px solid rgba(30,30,46,0.6)",
-                  background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                  opacity: isNull ? 0.35 : 1,
+            {rows.map((row, i) => (
+              <div key={row.label} style={{
+                display: "grid",
+                gridTemplateColumns: "200px 1fr",
+                padding: "8px 20px",
+                borderBottom: "1px solid rgba(30,30,46,0.6)",
+                background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+              }}>
+                <span style={{
+                  fontFamily: "'Rajdhani', sans-serif",
+                  fontWeight: PIN_ORDER.includes(row.label) ? 600 : 400,
+                  fontSize: "0.78rem",
+                  letterSpacing: "0.08em",
+                  color: PIN_ORDER.includes(row.label) ? "var(--text-primary)" : "var(--text-primary)",
+                  textTransform: "uppercase",
+                  alignSelf: "center",
                 }}>
-                  <span style={{
-                    fontFamily: "'Rajdhani', sans-serif",
-                    fontWeight: 500,
-                    fontSize: "0.78rem",
-                    letterSpacing: "0.1em",
-                    color: "var(--text-muted)",
-                    textTransform: "uppercase",
-                    alignSelf: "center",
-                  }}>
-                    {row.label}
-                  </span>
-                  <span style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "0.82rem",
-                    color: isNull ? "var(--text-muted)" : "var(--text-primary)",
-                    alignSelf: "center",
-                  }}>
-                    {row.value ?? "—"}
-                  </span>
-                </div>
-              );
-            })}
+                  {row.label}
+                </span>
+                <span style={{
+                  fontFamily: PIN_ORDER.includes(row.label)
+                    ? "'Rajdhani', sans-serif"
+                    : "'JetBrains Mono', monospace",
+                  fontWeight: PIN_ORDER.includes(row.label) ? 600 : 400,
+                  fontSize: PIN_ORDER.includes(row.label) ? "0.9rem" : "0.78rem",
+                  color: PIN_ORDER.includes(row.label)
+                    ? "var(--accent-cyan)"
+                    : "var(--text-primary)",
+                  alignSelf: "center",
+                }}>
+                  {row.value}
+                </span>
+              </div>
+            ))}
           </div>
+        ) : (
+          !vinMissing && (
+            <div style={{
+              padding: "32px 20px",
+              textAlign: "center",
+              fontFamily: "'Rajdhani', sans-serif",
+              fontSize: "0.82rem",
+              color: "var(--text-muted)",
+              letterSpacing: "0.1em",
+            }}>
+              No vehicle data available.
+            </div>
+          )
         )}
 
-        {/* State: VIN missing and no info yet — just the input, no rows */}
-        {vinMissing && !info?.make && (
+        {/* Waiting for entry state */}
+        {vinMissing && !hasData && (
           <div style={{
-            padding: "20px",
+            padding: "24px 20px",
+            textAlign: "center",
             fontFamily: "'Rajdhani', sans-serif",
             fontSize: "0.8rem",
             color: "var(--text-muted)",
-            textAlign: "center",
             letterSpacing: "0.1em",
           }}>
             Enter a VIN above to identify this vehicle.
           </div>
         )}
 
-        {/* State: VIN was manually entered, now show rows */}
-        {vinMissing && info?.make && (
-          <div style={{ overflowY: "auto", flex: 1 }}>
-            {buildRows(info).map((row, i) => {
-              const isNull = !row.value;
-              return (
-                <div key={row.label} style={{
-                  display: "grid",
-                  gridTemplateColumns: "160px 1fr",
-                  padding: "10px 20px",
-                  borderBottom: "1px solid rgba(30,30,46,0.6)",
-                  background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                  opacity: isNull ? 0.35 : 1,
-                }}>
-                  <span style={{
-                    fontFamily: "'Rajdhani', sans-serif",
-                    fontWeight: 500,
-                    fontSize: "0.78rem",
-                    letterSpacing: "0.1em",
-                    color: "var(--text-muted)",
-                    textTransform: "uppercase",
-                    alignSelf: "center",
-                  }}>
-                    {row.label}
-                  </span>
-                  <span style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "0.82rem",
-                    color: isNull ? "var(--text-muted)" : "var(--text-primary)",
-                    alignSelf: "center",
-                  }}>
-                    {row.value ?? "—"}
-                  </span>
-                </div>
-              );
-            })}
+        {/* Footer showing field count */}
+        {hasData && (
+          <div style={{
+            padding: "8px 20px",
+            borderTop: "1px solid var(--border)",
+            background: "var(--bg-panel)",
+            flexShrink: 0,
+          }}>
+            <span style={{
+              fontFamily: "'Rajdhani', sans-serif",
+              fontSize: "0.7rem",
+              color: "var(--text-muted)",
+              letterSpacing: "0.1em",
+            }}>
+              {rows.length} FIELDS · SOURCE: NHTSA vPIC API
+            </span>
           </div>
         )}
       </div>

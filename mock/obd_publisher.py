@@ -13,7 +13,13 @@ client.connect(BROKER_HOST, BROKER_PORT)
 client.loop_start()
 
 # Simulate VIN not available
-client.publish("telemetry/vehicle/info", json.dumps({"vin": None}))
+client.publish("telemetry/vehicle/info", json.dumps({
+    "vin": None,
+    "make": None,
+    "model": None,
+    "year": None,
+    "extra_fields": {}
+}))
 
 print("Mock OBD publisher started — publishing at 10 Hz")
 

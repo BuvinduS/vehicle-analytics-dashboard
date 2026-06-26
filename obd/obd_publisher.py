@@ -7,7 +7,7 @@ Two modes:
   advanced — queries all supported PIDs at ~1Hz
 
 At startup, queries VIN and decodes vehicle info via NHTSA API,
-publishing once to telemetry/vehicle/info.
+publishing once to telemetry/vehicle/info with all non-null fields.
 
 Mode is switched by publishing to telemetry/control:
   {"mode": "advanced"} or {"mode": "normal"}
@@ -37,9 +37,13 @@ TOPIC_CONTROL      = "telemetry/control"
 TOPIC_VEHICLE_INFO = "telemetry/vehicle/info"
 SESSION_ID         = "mock_001"
 DRIVER_ID          = "driver_a"
-MAX_RETRIES = 5 
 
 NHTSA_URL = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/{}?format=json"
+
+SKIP_FIELDS = {
+    "Error Code", "Error Text", "Possible Values",
+    "Additional Error Text", "Suggested VIN", "vehicleDescriptor",
+}
 
 CORE_COMMANDS = [
     obd.commands.SPEED,
@@ -88,62 +92,69 @@ def on_control_message(client, userdata, msg):
 # ---------------------------------------------------------------------------
 
 def get_vehicle_info(conn, mqtt_client):
-    """Query VIN, decode via NHTSA, publish to telemetry/vehicle/info."""
+    """Query VIN, decode via NHTSA, publish full extra_fields to MQTT."""
     log.info("Querying VIN...")
 
     try:
         vin_response = conn.query(obd.commands.VIN)
     except Exception as e:
         log.warning("VIN query failed: %s", e)
+        mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps({
+            "vin": None, "make": None, "model": None,
+            "year": None, "extra_fields": {}
+        }))
         return
 
     if vin_response.is_null():
         log.warning("VIN not available from this vehicle")
-        mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps({"vin": None}))
+        mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps({
+            "vin": None, "make": None, "model": None,
+            "year": None, "extra_fields": {}
+        }))
         return
 
-    vin = str(vin_response.value).strip()
+    vin = str(vin_response.value).strip().upper()
     log.info("VIN: %s", vin)
 
-    info = {"vin": vin}
+    extra_fields = {}
 
     try:
         r = requests.get(NHTSA_URL.format(vin), timeout=10)
         r.raise_for_status()
         results = r.json().get("Results", [])
-        fields = {item["Variable"]: item["Value"] for item in results}
 
-        # Extract useful fields, skip None/"Not Applicable" values
-        def get(key):
-            v = fields.get(key)
-            return v if v and v not in ("Not Applicable", "null", "") else None
+        for item in results:
+            v = item.get("Value", "").strip()
+            if (
+                v and
+                v != "Not Applicable" and
+                v != "null" and
+                v != "" and
+                v != "0" and
+                item["Variable"] not in SKIP_FIELDS
+            ):
+                extra_fields[item["Variable"]] = v
 
-        info.update({
-            "make":          get("Make"),
-            "model":         get("Model"),
-            "year":          get("Model Year"),
-            "trim":          get("Trim"),
-            "body_class":    get("Body Class"),
-            "drive_type":    get("Drive Type"),
-            "fuel_type":     get("Fuel Type - Primary"),
-            "fuel_type_secondary": get("Fuel Type - Secondary"),
-            "engine_l":      get("Displacement (L)"),
-            "engine_cyl":    get("Engine Number of Cylinders"),
-            "transmission":  get("Transmission Style"),
-            "plant_country": get("Plant Country"),
-            "vehicle_type":  get("Vehicle Type"),
-            "electrification_level": get("Electrification Level"),
-        })
-
-        log.info("Vehicle: %s %s %s", info.get("year"), info.get("make"), info.get("model"))
+        log.info("Vehicle: %s %s %s",
+                 extra_fields.get("Model Year"),
+                 extra_fields.get("Make"),
+                 extra_fields.get("Model"))
 
     except requests.RequestException as e:
         log.warning("NHTSA lookup failed (no internet?): %s", e)
     except Exception as e:
         log.warning("NHTSA parse error: %s", e)
 
+    info = {
+        "vin":          vin,
+        "make":         extra_fields.get("Make"),
+        "model":        extra_fields.get("Model"),
+        "year":         extra_fields.get("Model Year"),
+        "extra_fields": extra_fields,
+    }
+
     mqtt_client.publish(TOPIC_VEHICLE_INFO, json.dumps(info))
-    log.info("Vehicle info published")
+    log.info("Vehicle info published (%d fields)", len(extra_fields))
 
 
 # ---------------------------------------------------------------------------
@@ -248,15 +259,13 @@ def main():
     vehicle_info_published = False
 
     try:
-        retry_count = 0
-
         while True:
             if conn is None or not conn.is_connected():
                 log.info("Connecting to OBD on %s...", SERIAL_PORT)
                 conn = connect_obd()
                 if conn is None:
                     log.error("OBD connection failed, exiting for connect.sh to reconnect")
-                    break  # exit immediately, connect.sh loops
+                    break
                 if not vehicle_info_published:
                     get_vehicle_info(conn, mqtt_client)
                     vehicle_info_published = True
@@ -280,7 +289,7 @@ def main():
                     conn.close()
                 except Exception:
                     pass
-                break  # exit immediately
+                break
 
     except KeyboardInterrupt:
         log.info("Stopping OBD publisher...")

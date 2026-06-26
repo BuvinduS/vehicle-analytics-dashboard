@@ -28,17 +28,7 @@ export interface VehicleInfo {
   make: string | null;
   model: string | null;
   year: string | null;
-  trim: string | null;
-  body_class: string | null;
-  drive_type: string | null;
-  fuel_type: string | null;
-  fuel_type_secondary: string | null;
-  engine_l: string | null;
-  engine_cyl: string | null;
-  transmission: string | null;
-  plant_country: string | null;
-  vehicle_type: string | null;
-  electrification_level: string | null;
+  extra_fields: Record<string, string>; // all non-null fields from NHTSA
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -46,38 +36,41 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
 const RECONNECT_DELAY_MS = 2000;
 
-// Fetch and decode a VIN from NHTSA — used by both the Pi (via publisher)
-// and the browser (via manual entry in VehicleInfoPanel)
-export async function decodeVin(vin: string): Promise<Partial<VehicleInfo>> {
+// Fields to skip — metadata/internal NHTSA fields not useful for display
+const SKIP_FIELDS = new Set([
+  "Error Code", "Error Text", "Possible Values", "Additional Error Text",
+  "Suggested VIN", "vehicleDescriptor",
+]);
+
+export async function decodeVin(vin: string): Promise<VehicleInfo> {
   const url = `https://vpic.nhtsa.dot.gov/api/vehicles/decodevin/${vin.trim()}?format=json`;
   const r = await fetch(url);
   if (!r.ok) throw new Error(`NHTSA request failed: ${r.status}`);
   const json = await r.json();
   const results: { Variable: string; Value: string }[] = json.Results ?? [];
-  const fields: Record<string, string> = {};
-  for (const item of results) fields[item.Variable] = item.Value;
 
-  const get = (key: string) => {
-    const v = fields[key];
-    return v && v !== "Not Applicable" && v !== "null" && v !== "" ? v : null;
-  };
+  // Collect all non-null, non-empty, non-zero fields
+  const extra_fields: Record<string, string> = {};
+  for (const item of results) {
+    const v = item.Value?.trim();
+    if (
+      v &&
+      v !== "Not Applicable" &&
+      v !== "null" &&
+      v !== "" &&
+      v !== "0" &&
+      !SKIP_FIELDS.has(item.Variable)
+    ) {
+      extra_fields[item.Variable] = v;
+    }
+  }
 
   return {
-    vin:                   vin.trim().toUpperCase(),
-    make:                  get("Make"),
-    model:                 get("Model"),
-    year:                  get("Model Year"),
-    trim:                  get("Trim"),
-    body_class:            get("Body Class"),
-    drive_type:            get("Drive Type"),
-    fuel_type:             get("Fuel Type - Primary"),
-    fuel_type_secondary:   get("Fuel Type - Secondary"),
-    engine_l:              get("Displacement (L)"),
-    engine_cyl:            get("Engine Number of Cylinders"),
-    transmission:          get("Transmission Style"),
-    plant_country:         get("Plant Country"),
-    vehicle_type:          get("Vehicle Type"),
-    electrification_level: get("Electrification Level"),
+    vin:          vin.trim().toUpperCase(),
+    make:         extra_fields["Make"] ?? null,
+    model:        extra_fields["Model"] ?? null,
+    year:         extra_fields["Model Year"] ?? null,
+    extra_fields,
   };
 }
 
@@ -106,9 +99,8 @@ export function useTelemetry() {
         const data = JSON.parse(event.data);
         if (data.type === "vehicle_info") {
           const { type, ...info } = data;
-          // Only update from WebSocket if we don't already have manually-entered info
-          // (don't overwrite a manual entry with a null VIN from the Pi)
           setVehicleInfo(prev => {
+            // Don't overwrite manually entered info with a null VIN from Pi
             if (prev?.vin && !info.vin) return prev;
             return info as VehicleInfo;
           });
