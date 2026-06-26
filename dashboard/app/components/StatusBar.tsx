@@ -6,9 +6,17 @@ interface StatusBarProps {
   status: ConnectionStatus;
   sessionId: string | null;
   lastTs: number | null;
+  mode: "normal" | "advanced";
+  onModeToggle: () => void;
 }
 
-export default function StatusBar({ status, sessionId, lastTs }: StatusBarProps) {
+export default function StatusBar({
+  status,
+  sessionId,
+  lastTs,
+  mode,
+  onModeToggle,
+}: StatusBarProps) {
   const statusConfig = {
     connected:    { color: "var(--accent-cyan)", label: "LIVE" },
     connecting:   { color: "var(--accent-amber)", label: "CONNECTING" },
@@ -50,7 +58,7 @@ export default function StatusBar({ status, sessionId, lastTs }: StatusBarProps)
         </span>
       </div>
 
-      {/* Right: status indicators */}
+      {/* Right: mode toggle + status */}
       <div style={{ display: "flex", alignItems: "center", gap: "24px" }}>
         {sessionId && (
           <span style={{
@@ -62,6 +70,7 @@ export default function StatusBar({ status, sessionId, lastTs }: StatusBarProps)
             SESSION: <span style={{ color: "var(--text-primary)" }}>{sessionId}</span>
           </span>
         )}
+
         <span style={{
           fontFamily: "'JetBrains Mono', monospace",
           fontSize: "0.72rem",
@@ -69,8 +78,29 @@ export default function StatusBar({ status, sessionId, lastTs }: StatusBarProps)
         }}>
           {latency}
         </span>
+
+        {/* Mode toggle button */}
+        <button
+          onClick={onModeToggle}
+          style={{
+            fontFamily: "'Rajdhani', sans-serif",
+            fontWeight: 600,
+            fontSize: "0.75rem",
+            letterSpacing: "0.15em",
+            padding: "4px 12px",
+            borderRadius: "4px",
+            border: `1px solid ${mode === "advanced" ? "var(--accent-cyan)" : "var(--border)"}`,
+            background: mode === "advanced" ? "rgba(0,229,255,0.08)" : "transparent",
+            color: mode === "advanced" ? "var(--accent-cyan)" : "var(--text-muted)",
+            cursor: "pointer",
+            transition: "all 200ms ease",
+          }}
+        >
+          {mode === "advanced" ? "NORMAL VIEW" : "ADVANCED"}
+        </button>
+
+        {/* Connection status */}
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {/* Pulsing dot */}
           <span style={{
             display: "inline-block",
             width: "7px",

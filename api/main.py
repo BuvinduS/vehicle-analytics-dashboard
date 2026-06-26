@@ -1,13 +1,13 @@
 """
-FastAPI WebSocket bridge: MQTT → WebSocket fan-out
-Run with:  uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+FastAPI WebSocket bridge: MQTT → WebSocket fan-out (bidirectional)
+Browser can send {"mode": "normal"} or {"mode": "advanced"} to switch OBD mode.
+Run with:  uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import json
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
 
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -17,10 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # Config
 # ---------------------------------------------------------------------------
 
-BROKER_HOST = "localhost"
-BROKER_PORT = 1883
-TOPIC_OBD   = "telemetry/vehicle/obd"
-TOPIC_IMU   = "telemetry/vehicle/imu"
+BROKER_HOST   = "localhost"
+BROKER_PORT   = 1883
+TOPIC_OBD     = "telemetry/vehicle/obd"
+TOPIC_IMU     = "telemetry/vehicle/imu"
+TOPIC_CONTROL = "telemetry/control"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -28,9 +29,6 @@ log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # In-memory merged telemetry state
-# The OBD stream drives the broadcast cadence (~10 Hz).
-# The IMU stream just keeps its fields current so the next OBD broadcast
-# picks them up. Both share the same session_id in the mock setup.
 # ---------------------------------------------------------------------------
 
 class TelemetryState:
@@ -42,7 +40,6 @@ class TelemetryState:
         self._obd = payload
 
     def update_imu(self, payload: dict):
-        # Keep only the IMU-specific fields to avoid overwriting OBD fields
         self._imu = {
             "accel_x": payload.get("accel_x"),
             "accel_y": payload.get("accel_y"),
@@ -70,7 +67,8 @@ class ConnectionManager:
         log.info("Dashboard client connected  (total: %d)", len(self._clients))
 
     def disconnect(self, ws: WebSocket):
-        self._clients.remove(ws)
+        if ws in self._clients:
+            self._clients.remove(ws)
         log.info("Dashboard client disconnected (total: %d)", len(self._clients))
 
     async def broadcast(self, data: dict):
@@ -84,17 +82,18 @@ class ConnectionManager:
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self._clients.remove(ws)
+            if ws in self._clients:
+                self._clients.remove(ws)
 
 
 manager = ConnectionManager()
 
+# ---------------------------------------------------------------------------
+# MQTT client (module-level so the WS endpoint can publish control messages)
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# MQTT setup — runs in a background thread (paho is synchronous)
-# We use asyncio.get_event_loop().call_soon_threadsafe to safely schedule
-# the async broadcast from the paho callback thread.
-# ---------------------------------------------------------------------------
+mqtt_client: mqtt.Client | None = None
+
 
 def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -117,20 +116,14 @@ def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
 
         if msg.topic == TOPIC_OBD:
             state.update_obd(payload)
-            # OBD arrival triggers a broadcast with the latest merged state
             merged = state.merged()
             asyncio.run_coroutine_threadsafe(manager.broadcast(merged), loop)
 
         elif msg.topic == TOPIC_IMU:
             state.update_imu(payload)
-            # IMU alone doesn't trigger a broadcast — OBD cadence drives it.
-            # If IMU-only updates are needed (e.g. when car is stationary),
-            # uncomment the two lines below:
-            merged = state.merged()
-            asyncio.run_coroutine_threadsafe(manager.broadcast(merged), loop)
 
     def on_disconnect(client, userdata, flags, reason_code, properties):
-        log.warning("MQTT disconnected (reason_code=%s) — paho will reconnect", reason_code)
+        log.warning("MQTT disconnected (reason_code=%s)", reason_code)
 
     client.on_connect    = on_connect
     client.on_message    = on_message
@@ -140,11 +133,12 @@ def make_mqtt_client(loop: asyncio.AbstractEventLoop) -> mqtt.Client:
 
 
 # ---------------------------------------------------------------------------
-# App lifespan — start/stop MQTT in the background
+# App lifespan
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global mqtt_client
     loop = asyncio.get_event_loop()
     mqtt_client = make_mqtt_client(loop)
 
@@ -156,7 +150,7 @@ async def lifespan(app: FastAPI):
     mqtt_client.loop_start()
     log.info("MQTT client loop started")
 
-    yield  # app is running
+    yield
 
     mqtt_client.loop_stop()
     mqtt_client.disconnect()
@@ -171,7 +165,7 @@ app = FastAPI(title="Telemetry WS Bridge", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -187,9 +181,16 @@ async def health():
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
-        # Keep the connection alive — the server pushes data, client doesn't send anything.
-        # We still need to await something so the coroutine doesn't return immediately.
         while True:
-            await ws.receive_text()  # will raise WebSocketDisconnect on close
+            # Receive messages from the browser (mode switch etc.)
+            text = await ws.receive_text()
+            try:
+                msg = json.loads(text)
+                # Forward control messages to MQTT so the OBD publisher picks them up
+                if "mode" in msg and mqtt_client:
+                    mqtt_client.publish(TOPIC_CONTROL, json.dumps({"mode": msg["mode"]}))
+                    log.info("Mode switch forwarded to MQTT: %s", msg["mode"])
+            except json.JSONDecodeError:
+                log.warning("Bad JSON from browser: %s", text)
     except WebSocketDisconnect:
         manager.disconnect(ws)

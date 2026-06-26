@@ -2,17 +2,25 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
+export interface PidEntry {
+  value: number | null;
+  unit: string | null;
+  desc: string;
+}
+
 export interface TelemetryFrame {
   ts: number;
   session_id: string;
-  speed_kmh: number;
-  rpm: number;
-  throttle_pct: number;
-  coolant_temp_c: number;
-  engine_load_pct: number;
-  accel_x: number;
-  accel_y: number;
-  accel_z: number;
+  mode: "normal" | "advanced";
+  speed_kmh: number | null;
+  rpm: number | null;
+  throttle_pct: number | null;
+  coolant_temp_c: number | null;
+  engine_load_pct: number | null;
+  accel_x: number | null;
+  accel_y: number | null;
+  accel_z: number | null;
+  all_pids?: Record<string, PidEntry>;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
@@ -29,7 +37,6 @@ export function useTelemetry() {
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return;
-
     setStatus("connecting");
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
@@ -55,9 +62,14 @@ export function useTelemetry() {
       retryRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
     };
 
-    ws.onerror = () => {
-      ws.close(); // triggers onclose → reconnect
-    };
+    ws.onerror = () => ws.close();
+  }, []);
+
+  // Send a message to the server (e.g. mode switch)
+  const sendMessage = useCallback((data: object) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
   }, []);
 
   useEffect(() => {
@@ -70,5 +82,5 @@ export function useTelemetry() {
     };
   }, [connect]);
 
-  return { frame, status };
+  return { frame, status, sendMessage };
 }
