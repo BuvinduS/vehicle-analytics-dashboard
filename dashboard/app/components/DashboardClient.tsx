@@ -7,7 +7,7 @@ import LinearBar from "./LinearBar";
 import StatusBar from "./StatusBar";
 import AdvancedTable from "./AdvancedTable";
 import VehicleInfoPanel from "./VehicleInfoPanel";
-import { useTelemetry } from "../hooks/useTelemetry";
+import { useTelemetry, VehicleInfo } from "../hooks/useTelemetry";
 
 const DEFAULTS = {
   speed_kmh: 0,
@@ -21,7 +21,7 @@ const DEFAULTS = {
 };
 
 export default function DashboardClient() {
-  const { frame, vehicleInfo, status, sendMessage } = useTelemetry();
+  const { frame, vehicleInfo, setVehicleInfo, status, sendMessage } = useTelemetry();
   const d = frame ?? DEFAULTS;
 
   const [uiMode, setUiMode] = useState<"normal" | "advanced">("normal");
@@ -32,6 +32,12 @@ export default function DashboardClient() {
     setUiMode(next);
     sendMessage({ mode: next });
   }, [uiMode, sendMessage]);
+
+  // Called when user manually decodes a VIN in the panel
+  const handleVehicleInfoDecoded = useCallback((info: VehicleInfo) => {
+    setVehicleInfo(info);
+    // Don't close the panel — let the user see the decoded info
+  }, [setVehicleInfo]);
 
   const isAdvanced = uiMode === "advanced";
   const heroSize  = isAdvanced ? 130 : 260;
@@ -187,10 +193,11 @@ export default function DashboardClient() {
       )}
 
       {/* Vehicle info modal */}
-      {showVehicleInfo && vehicleInfo && (
+      {showVehicleInfo && (
         <VehicleInfoPanel
           info={vehicleInfo}
           onClose={() => setShowVehicleInfo(false)}
+          onVehicleInfoDecoded={handleVehicleInfoDecoded}
         />
       )}
 

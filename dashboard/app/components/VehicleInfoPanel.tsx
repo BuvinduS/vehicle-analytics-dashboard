@@ -1,10 +1,12 @@
 "use client";
 
-import { VehicleInfo } from "../hooks/useTelemetry";
+import { useState } from "react";
+import { VehicleInfo, decodeVin } from "../hooks/useTelemetry";
 
 interface VehicleInfoPanelProps {
-  info: VehicleInfo;
+  info: VehicleInfo | null;
   onClose: () => void;
+  onVehicleInfoDecoded: (info: VehicleInfo) => void;
 }
 
 interface InfoRow {
@@ -12,8 +14,8 @@ interface InfoRow {
   value: string | null | undefined;
 }
 
-export default function VehicleInfoPanel({ info, onClose }: VehicleInfoPanelProps) {
-  const rows: InfoRow[] = [
+function buildRows(info: VehicleInfo): InfoRow[] {
+  return [
     { label: "VIN",              value: info.vin },
     { label: "Make",             value: info.make },
     { label: "Model",            value: info.model },
@@ -30,6 +32,40 @@ export default function VehicleInfoPanel({ info, onClose }: VehicleInfoPanelProp
     { label: "Transmission",     value: info.transmission },
     { label: "Plant Country",    value: info.plant_country },
   ];
+}
+
+export default function VehicleInfoPanel({
+  info,
+  onClose,
+  onVehicleInfoDecoded,
+}: VehicleInfoPanelProps) {
+  const [vinInput, setVinInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const vinMissing = !info?.vin;
+
+  async function handleVinSubmit() {
+    const vin = vinInput.trim().toUpperCase();
+    if (vin.length !== 17) {
+      setError("VIN must be exactly 17 characters.");
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    try {
+      const decoded = await decodeVin(vin);
+      if (!decoded.make) {
+        setError("Could not decode this VIN. Please check and try again.");
+        return;
+      }
+      onVehicleInfoDecoded(decoded as VehicleInfo);
+    } catch (e) {
+      setError("Lookup failed. Check your internet connection.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <>
@@ -98,42 +134,176 @@ export default function VehicleInfoPanel({ info, onClose }: VehicleInfoPanelProp
           </button>
         </div>
 
-        {/* Rows */}
-        <div style={{ overflowY: "auto", flex: 1 }}>
-          {rows.map((row, i) => {
-            const isNull = !row.value;
-            return (
-              <div key={row.label} style={{
-                display: "grid",
-                gridTemplateColumns: "160px 1fr",
-                padding: "10px 20px",
-                borderBottom: "1px solid rgba(30,30,46,0.6)",
-                background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                opacity: isNull ? 0.35 : 1,
-              }}>
-                <span style={{
-                  fontFamily: "'Rajdhani', sans-serif",
-                  fontWeight: 500,
-                  fontSize: "0.78rem",
-                  letterSpacing: "0.1em",
-                  color: "var(--text-muted)",
-                  textTransform: "uppercase",
-                  alignSelf: "center",
-                }}>
-                  {row.label}
-                </span>
-                <span style={{
+        {/* Manual VIN entry — shown when VIN not available from ECU */}
+        {vinMissing && (
+          <div style={{
+            padding: "20px",
+            borderBottom: "1px solid var(--border)",
+            background: "rgba(255,179,0,0.04)",
+          }}>
+            <p style={{
+              fontFamily: "'Rajdhani', sans-serif",
+              fontSize: "0.82rem",
+              color: "var(--text-muted)",
+              marginBottom: "12px",
+              lineHeight: 1.5,
+            }}>
+              VIN not available from this vehicle's ECU. Enter it manually to
+              identify the vehicle — find it on the windshield (driver's side,
+              bottom corner) or the driver's door jamb.
+            </p>
+
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                value={vinInput}
+                onChange={e => setVinInput(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === "Enter" && handleVinSubmit()}
+                placeholder="17-CHARACTER VIN"
+                maxLength={17}
+                style={{
+                  flex: 1,
                   fontFamily: "'JetBrains Mono', monospace",
                   fontSize: "0.82rem",
-                  color: isNull ? "var(--text-muted)" : "var(--text-primary)",
-                  alignSelf: "center",
+                  letterSpacing: "0.1em",
+                  padding: "8px 12px",
+                  background: "var(--bg-panel)",
+                  border: `1px solid ${error ? "var(--accent-red)" : "var(--border)"}`,
+                  borderRadius: "6px",
+                  color: "var(--text-primary)",
+                  outline: "none",
+                }}
+              />
+              <button
+                onClick={handleVinSubmit}
+                disabled={loading || vinInput.length !== 17}
+                style={{
+                  fontFamily: "'Rajdhani', sans-serif",
+                  fontWeight: 700,
+                  fontSize: "0.8rem",
+                  letterSpacing: "0.15em",
+                  padding: "8px 16px",
+                  borderRadius: "6px",
+                  border: "none",
+                  background: vinInput.length === 17 && !loading
+                    ? "var(--accent-cyan)"
+                    : "var(--bg-panel)",
+                  color: vinInput.length === 17 && !loading
+                    ? "var(--bg-base)"
+                    : "var(--text-muted)",
+                  cursor: vinInput.length === 17 && !loading ? "pointer" : "not-allowed",
+                  transition: "all 200ms ease",
+                  minWidth: "60px",
+                }}
+              >
+                {loading ? "..." : "GO"}
+              </button>
+            </div>
+
+            {error && (
+              <p style={{
+                fontFamily: "'Rajdhani', sans-serif",
+                fontSize: "0.75rem",
+                color: "var(--accent-red)",
+                marginTop: "6px",
+                letterSpacing: "0.05em",
+              }}>
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Info rows — shown when VIN is available (auto or manual) */}
+        {info && !vinMissing && (
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {buildRows(info).map((row, i) => {
+              const isNull = !row.value;
+              return (
+                <div key={row.label} style={{
+                  display: "grid",
+                  gridTemplateColumns: "160px 1fr",
+                  padding: "10px 20px",
+                  borderBottom: "1px solid rgba(30,30,46,0.6)",
+                  background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                  opacity: isNull ? 0.35 : 1,
                 }}>
-                  {row.value ?? "—"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+                  <span style={{
+                    fontFamily: "'Rajdhani', sans-serif",
+                    fontWeight: 500,
+                    fontSize: "0.78rem",
+                    letterSpacing: "0.1em",
+                    color: "var(--text-muted)",
+                    textTransform: "uppercase",
+                    alignSelf: "center",
+                  }}>
+                    {row.label}
+                  </span>
+                  <span style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "0.82rem",
+                    color: isNull ? "var(--text-muted)" : "var(--text-primary)",
+                    alignSelf: "center",
+                  }}>
+                    {row.value ?? "—"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* State: VIN missing and no info yet — just the input, no rows */}
+        {vinMissing && !info?.make && (
+          <div style={{
+            padding: "20px",
+            fontFamily: "'Rajdhani', sans-serif",
+            fontSize: "0.8rem",
+            color: "var(--text-muted)",
+            textAlign: "center",
+            letterSpacing: "0.1em",
+          }}>
+            Enter a VIN above to identify this vehicle.
+          </div>
+        )}
+
+        {/* State: VIN was manually entered, now show rows */}
+        {vinMissing && info?.make && (
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {buildRows(info).map((row, i) => {
+              const isNull = !row.value;
+              return (
+                <div key={row.label} style={{
+                  display: "grid",
+                  gridTemplateColumns: "160px 1fr",
+                  padding: "10px 20px",
+                  borderBottom: "1px solid rgba(30,30,46,0.6)",
+                  background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                  opacity: isNull ? 0.35 : 1,
+                }}>
+                  <span style={{
+                    fontFamily: "'Rajdhani', sans-serif",
+                    fontWeight: 500,
+                    fontSize: "0.78rem",
+                    letterSpacing: "0.1em",
+                    color: "var(--text-muted)",
+                    textTransform: "uppercase",
+                    alignSelf: "center",
+                  }}>
+                    {row.label}
+                  </span>
+                  <span style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "0.82rem",
+                    color: isNull ? "var(--text-muted)" : "var(--text-primary)",
+                    alignSelf: "center",
+                  }}>
+                    {row.value ?? "—"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );

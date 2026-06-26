@@ -12,6 +12,9 @@ client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.connect(BROKER_HOST, BROKER_PORT)
 client.loop_start()
 
+# Simulate VIN not available
+client.publish("telemetry/vehicle/info", json.dumps({"vin": None}))
+
 print("Mock OBD publisher started — publishing at 10 Hz")
 
 t = 0.0

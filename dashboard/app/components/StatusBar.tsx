@@ -31,9 +31,19 @@ export default function StatusBar({
     ? `${Math.round(Date.now() / 1000 - lastTs)} s ago`
     : "—";
 
-  const vehicleSummary = vehicleInfo?.make
+  // Vehicle label logic:
+  // - Has make/model → show "2019 Toyota Camry ›"
+  // - Connected but no VIN → show "ENTER VIN ›" (amber)
+  // - Not yet received vehicle info → show platform name
+  const vehicleLabel = vehicleInfo?.make
     ? `${vehicleInfo.year ?? ""} ${vehicleInfo.make} ${vehicleInfo.model ?? ""}`.trim()
+    : vehicleInfo !== null // we received a message but VIN was null
+    ? "ENTER VIN"
     : null;
+
+  const vehicleLabelColor = vehicleInfo?.make
+    ? "var(--accent-cyan)"
+    : "var(--accent-amber)";
 
   return (
     <header style={{
@@ -46,7 +56,7 @@ export default function StatusBar({
       flexWrap: "wrap",
       gap: "8px",
     }}>
-      {/* Left: branding + vehicle summary */}
+      {/* Left: branding + vehicle */}
       <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
         <span style={{
           fontFamily: "'Rajdhani', sans-serif",
@@ -58,7 +68,7 @@ export default function StatusBar({
           TELEMETRY
         </span>
 
-        {vehicleSummary ? (
+        {vehicleLabel ? (
           <button
             onClick={onVehicleInfoOpen}
             style={{
@@ -66,15 +76,14 @@ export default function StatusBar({
               fontWeight: 600,
               fontSize: "0.82rem",
               letterSpacing: "0.1em",
-              color: "var(--accent-cyan)",
+              color: vehicleLabelColor,
               background: "transparent",
               border: "none",
               cursor: "pointer",
               padding: 0,
-              textDecoration: "none",
             }}
           >
-            {vehicleSummary} ›
+            {vehicleLabel} ›
           </button>
         ) : (
           <span style={{
@@ -109,7 +118,6 @@ export default function StatusBar({
           {latency}
         </span>
 
-        {/* Mode toggle */}
         <button
           onClick={onModeToggle}
           style={{
@@ -129,7 +137,6 @@ export default function StatusBar({
           {mode === "advanced" ? "NORMAL" : "ADVANCED"}
         </button>
 
-        {/* Connection status */}
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <span style={{
             display: "inline-block",
