@@ -12,5 +12,17 @@ services:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     restart: unless-stopped
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    restart: unless-stopped
+
 volumes:
   timescaledb_data:
+  mosquitto_data:
+  mosquitto_log:
