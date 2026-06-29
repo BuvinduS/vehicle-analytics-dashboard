@@ -59,7 +59,7 @@ void setup() {
     Serial.print(F("[NET] Pinging broker... "));
     // just try a raw TCP connect test
     WiFiClient testClient;
-    if (testClient.connect("192.168.1.90", 1883)) {
+    if (testClient.connect(BROKER_IP, 1883)) {
         Serial.println(F("reachable."));
         testClient.stop();
     } else {
