@@ -7,9 +7,9 @@
 // ---------------------------------------------------------------------------
 // Configuration — update these for your environment
 // ---------------------------------------------------------------------------
-static const char* WIFI_SSID     = "SURAWEERA";
-static const char* WIFI_PASSWORD = "buvinduumesh";
-static const char* BROKER_IP     = "192.168.1.90";  // Pi's IP
+static const char* WIFI_SSID     = "S23_FE";
+static const char* WIFI_PASSWORD = "clbu0004";
+static const char* BROKER_IP     = "10.212.131.196";  // Pi's IP
 static const uint16_t BROKER_PORT = 1883;
 
 // MPU6050 pins — adjust for your ESP32 board
